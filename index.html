@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <!-- Optimisation Viewport pour occuper 100% de l'écran (y compris sous l'encoche des iPhone) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    
+    <!-- Balises PWA pour un rendu d'application native si ajoutée à l'écran d'accueil -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="theme-color" content="#FFFFFF">
+    
+    <title>Mon Budget Journalier</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #FFFFFF; /* Light theme background */
+            color: #1A1A1A; /* Dark text */
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        /* Custom scrollbar for webkit to keep it clean */
+        ::-webkit-scrollbar {
+            width: 0px;
+        }
+
+        /* Yuh inspired orange/coral accent */
+        .yuh-accent {
+            color: #FF5421; /* Yuh vibrant coral/orange */
+        }
+        .yuh-bg-accent {
+            background-color: #FF5421;
+        }
+        
+        /* Remove arrows from number input */
+        input[type="number"]::-webkit-inner-spin-button, 
+        input[type="number"]::-webkit-outer-spin-button { 
+            -webkit-appearance: none; 
+            margin: 0; 
+        }
+        input[type="number"] {
+            -moz-appearance: textfield;
+        }
+
+        /* Smooth transition for the calculated number */
+        .value-transition {
+            transition: all 0.2s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.2s ease-out forwards;
+        }
+    </style>
+</head>
+<!-- Le body s'adapte à 100% de la hauteur dynamique (100dvh) et devient blanc sur mobile -->
+<body class="min-h-[100dvh] flex justify-center items-start sm:items-center bg-white sm:bg-gradient-to-b sm:from-[#F5F3F8] sm:to-[#FFFFFF] text-[#1A1A1A] antialiased">
+
+    <!-- La div main s'étire sur tout l'écran sur mobile, mais redevient une carte sur ordinateur (sm:...) -->
+    <main 
+        class="w-full max-w-md bg-white sm:rounded-[2.5rem] px-5 sm:p-8 shadow-none sm:shadow-[0_8px_30px_rgb(0,0,0,0.08)] relative overflow-x-hidden overflow-y-auto sm:border border-[#EBE8F0] min-h-[100dvh] sm:min-h-fit flex flex-col"
+        style="padding-top: max(2rem, env(safe-area-inset-top)); padding-bottom: max(2rem, env(safe-area-inset-bottom));"
+    >
+        
+        <!-- Header Section -->
+        <header class="mb-8 text-center mt-2 sm:mt-0">
+            <h1 class="text-3xl tracking-tight mb-1 text-[#1A1A1A]">
+                My<span class="yuh-accent font-black lowercase text-4xl">yuh</span> <span class="font-bold">Limit</span>
+            </h1>
+            <p id="currentDateDisplay" class="text-[#666666] text-sm font-medium capitalize"></p>
+        </header>
+
+        <section class="bg-[#F8F7FA] p-6 rounded-[2rem] mb-4 border border-[#EBE8F0]">
+            <label for="balanceInput" class="block text-sm font-medium text-[#666666] mb-3">
+                Solde actuel sur le compte
+            </label>
+            <div class="flex items-center">
+                <span class="text-2xl font-bold text-[#666666] mr-2">CHF</span>
+                <input 
+                    type="number" 
+                    id="balanceInput" 
+                    inputmode="decimal"
+                    class="w-full bg-transparent text-4xl sm:text-5xl font-black outline-none text-[#1A1A1A] placeholder-[#C4C4C4]" 
+                    placeholder="0.00"
+                >
+            </div>
+
+            <div id="transactionsContainer" class="mt-4 flex flex-col gap-3"></div>
+            
+            <button id="addTransactionBtn" class="mt-4 w-full py-3 rounded-2xl border border-dashed border-[#D1D1D6] text-[#666666] font-medium hover:text-[#FF5421] hover:border-[#FF5421] hover:bg-[#FFF2F0] transition-colors flex items-center justify-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                </svg>
+                Ajouter débit / crédit
+            </button>
+        </section>
+
+        <!-- La classe 'mt-auto' repousse automatiquement cette zone tout en bas de l'écran du téléphone -->
+        <section class="mt-auto bg-[#F8F7FA] p-6 rounded-[2rem] border border-[#EBE8F0] relative overflow-hidden flex flex-col items-center justify-center min-h-[180px] shrink-0">
+            <!-- Top accent bar -->
+            <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#FF5421] to-[#FFA07A]"></div>
+            
+            <p class="text-sm font-medium text-[#666666] mb-2 text-center">
+                Tu peux dépenser environ
+            </p>
+            
+            <div class="flex items-baseline mb-2 value-transition" id="resultContainer">
+                <span id="dailyBudget" class="text-6xl font-black yuh-accent tracking-tighter">0.00</span>
+            </div>
+            
+            <p class="text-[#1A1A1A] text-lg font-bold mb-6">CHF / jour</p>
+            
+            <div class="bg-white border border-[#EBE8F0] px-4 py-2 rounded-full flex items-center shadow-sm">
+                <svg class="w-4 h-4 text-[#666666] mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                </svg>
+                <p id="daysLeftDisplay" class="text-xs font-medium text-[#666666]"></p>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const balanceInput = document.getElementById('balanceInput');
+            const dailyBudgetDisplay = document.getElementById('dailyBudget');
+            const currentDateDisplay = document.getElementById('currentDateDisplay');
+            const daysLeftDisplay = document.getElementById('daysLeftDisplay');
+            const resultContainer = document.getElementById('resultContainer');
+
+            let remainingDays = 1;
+
+            function initApp() {
+                const today = new Date();
+                const year = today.getFullYear();
+                const month = today.getMonth(); // 0 to 11
+                const currentDay = today.getDate();
+
+                // 1. Display Current Date in French
+                const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+                currentDateDisplay.textContent = today.toLocaleDateString('fr-CH', options);
+
+                // 2. Calculate the target date (l'avant-dernier jour du mois)
+                // "new Date(year, month + 1, 0)" gives the LAST day of the current month
+                const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
+                const targetDay = lastDayOfMonth - 1;
+
+                // 3. Calculate remaining days (Difference + 1 to be inclusive)
+                remainingDays = targetDay - currentDay + 1;
+
+                // Edge case: If we are the last day of the month, or somehow passed it
+                if (remainingDays <= 0) {
+                    remainingDays = 1; // Prevent division by zero, treat as 1 day remaining
+                }
+
+                // 4. Update UI with the context
+                const formattedTargetDate = `${String(targetDay).padStart(2, '0')}.${String(month + 1).padStart(2, '0')}.${year}`;
+                daysLeftDisplay.textContent = `${remainingDays} jour${remainingDays > 1 ? 's' : ''} restants (jusqu'au ${formattedTargetDate})`;
+
+                // Focus input automatically on non-mobile devices
+                if (window.innerWidth > 768) {
+                    balanceInput.focus();
+                }
+            }
+
+            function formatCHF(number) {
+            // Format to Swiss standards with apostrophe for thousands and 2 decimals
+            return number.toLocaleString('fr-CH', { 
+                minimumFractionDigits: 2, 
+                maximumFractionDigits: 2 
+            });
+        }
+
+        function updateCalculation() {
+            const balanceStr = balanceInput.value.replace(',', '.'); // Handle comma as decimal separator
+            let totalBalance = parseFloat(balanceStr);
+
+            if (isNaN(totalBalance)) {
+                totalBalance = 0;
+            }
+
+            // Add dynamic transactions (credits/debits)
+            const transactionInputs = document.querySelectorAll('.transaction-input');
+            transactionInputs.forEach(input => {
+                const valStr = input.value.replace(',', '.');
+                const val = parseFloat(valStr);
+                if (!isNaN(val)) {
+                    totalBalance += val; // Negative numbers will subtract automatically
+                }
+            });
+
+            // Animation effect: slight scale down when typing
+            resultContainer.style.transform = 'scale(0.97)';
+            setTimeout(() => {
+                resultContainer.style.transform = 'scale(1)';
+            }, 100);
+
+            // If total is 0 or less, daily budget is 0.
+            if (totalBalance <= 0) {
+                dailyBudgetDisplay.textContent = "0.00";
+                return;
+            }
+
+            const dailyBudget = totalBalance / remainingDays;
+            dailyBudgetDisplay.textContent = formatCHF(dailyBudget);
+        }
+
+        function addTransactionRow() {
+            const container = document.getElementById('transactionsContainer');
+            const row = document.createElement('div');
+            row.className = 'flex items-center bg-white rounded-2xl p-3 border border-[#EBE8F0] shadow-sm animate-fade-in';
+            
+            row.innerHTML = `
+                <span class="text-[#666666] font-bold mr-2 text-lg">CHF</span>
+                <input 
+                    type="number" 
+                    inputmode="decimal"
+                    class="transaction-input w-full bg-transparent text-xl font-bold outline-none text-[#1A1A1A] placeholder-[#C4C4C4]" 
+                    placeholder="+ ou - 0.00"
+                >
+                <button class="remove-btn p-2 text-[#666666] hover:text-[#FF3B30] transition-colors rounded-full hover:bg-[#F8F7FA] ml-1" title="Supprimer">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            `;
+
+            // Listen to input changes
+            const input = row.querySelector('input');
+            input.addEventListener('input', updateCalculation);
+
+            // Listen to remove button
+            const removeBtn = row.querySelector('.remove-btn');
+            removeBtn.addEventListener('click', () => {
+                row.remove();
+                updateCalculation();
+            });
+
+            container.appendChild(row);
+            input.focus();
+        }
+
+        // Event Listeners
+        balanceInput.addEventListener('input', updateCalculation);
+        document.getElementById('addTransactionBtn').addEventListener('click', addTransactionRow);
+        
+        // Initialize
+        initApp();
+    });
+    </script>
+</body>
+</html>
