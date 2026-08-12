@@ -75,6 +75,7 @@
                 My<span class="yuh-accent font-black lowercase text-4xl">yuh</span> <span class="font-bold">Limit</span>
             </h1>
             <p id="currentDateDisplay" class="text-[#666666] text-sm font-medium capitalize"></p>
+            <span id="saveStatus" class="text-xs text-[#999999] mt-1 inline-block"></span>
         </header>
 
         <section class="bg-[#F8F7FA] p-6 rounded-[2rem] mb-4 border border-[#EBE8F0]">
@@ -127,131 +128,262 @@
 
     </main>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Configuration Firebase & Identifiants
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'my-yuh-limit';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "demo", authDomain: "demo.firebaseapp.com", projectId: "demo-project"
+        };
+
+        let db = null;
+        let auth = null;
+        let user = null;
+        let saveTimeout = null;
+
+        // Dépenses récurrentes configurées
+        const RECURRING_EXPENSES = [
+            { day: 10, amount: -75.00, label: "Wingo" },
+            { day: 15, amount: -21.90, label: "Tidal" },
+            { day: 17, amount: -12.99, label: "Tesla" }
+        ];
+
+        let dismissedRecurringIds = new Set();
+        let remainingDays = 1;
+
+        document.addEventListener('DOMContentLoaded', async () => {
             const balanceInput = document.getElementById('balanceInput');
             const dailyBudgetDisplay = document.getElementById('dailyBudget');
             const currentDateDisplay = document.getElementById('currentDateDisplay');
             const daysLeftDisplay = document.getElementById('daysLeftDisplay');
             const resultContainer = document.getElementById('resultContainer');
+            const saveStatus = document.getElementById('saveStatus');
 
-            let remainingDays = 1;
-
-            function initApp() {
+            function initDateLogic() {
                 const today = new Date();
                 const year = today.getFullYear();
-                const month = today.getMonth(); // 0 to 11
+                const month = today.getMonth();
                 const currentDay = today.getDate();
 
-                // 1. Display Current Date in French
                 const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
                 currentDateDisplay.textContent = today.toLocaleDateString('fr-CH', options);
 
-                // 2. Calculate the target date (l'avant-dernier jour du mois)
-                // "new Date(year, month + 1, 0)" gives the LAST day of the current month
                 const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
                 const targetDay = lastDayOfMonth - 1;
 
-                // 3. Calculate remaining days (Difference + 1 to be inclusive)
                 remainingDays = targetDay - currentDay + 1;
+                if (remainingDays <= 0) remainingDays = 1;
 
-                // Edge case: If we are the last day of the month, or somehow passed it
-                if (remainingDays <= 0) {
-                    remainingDays = 1; // Prevent division by zero, treat as 1 day remaining
-                }
-
-                // 4. Update UI with the context
                 const formattedTargetDate = `${String(targetDay).padStart(2, '0')}.${String(month + 1).padStart(2, '0')}.${year}`;
                 daysLeftDisplay.textContent = `${remainingDays} jour${remainingDays > 1 ? 's' : ''} restants (jusqu'au ${formattedTargetDate})`;
-
-                // Focus input automatically on non-mobile devices
-                if (window.innerWidth > 768) {
-                    balanceInput.focus();
-                }
             }
 
             function formatCHF(number) {
-            // Format to Swiss standards with apostrophe for thousands and 2 decimals
-            return number.toLocaleString('fr-CH', { 
-                minimumFractionDigits: 2, 
-                maximumFractionDigits: 2 
-            });
-        }
-
-        function updateCalculation() {
-            const balanceStr = balanceInput.value.replace(',', '.'); // Handle comma as decimal separator
-            let totalBalance = parseFloat(balanceStr);
-
-            if (isNaN(totalBalance)) {
-                totalBalance = 0;
+                return number.toLocaleString('fr-CH', { 
+                    minimumFractionDigits: 2, 
+                    maximumFractionDigits: 2 
+                });
             }
 
-            // Add dynamic transactions (credits/debits)
-            const transactionInputs = document.querySelectorAll('.transaction-input');
-            transactionInputs.forEach(input => {
-                const valStr = input.value.replace(',', '.');
-                const val = parseFloat(valStr);
-                if (!isNaN(val)) {
-                    totalBalance += val; // Negative numbers will subtract automatically
+            function updateCalculation() {
+                const balanceStr = balanceInput.value.replace(',', '.');
+                let totalBalance = parseFloat(balanceStr);
+
+                if (isNaN(totalBalance)) {
+                    totalBalance = 0;
                 }
-            });
 
-            // Animation effect: slight scale down when typing
-            resultContainer.style.transform = 'scale(0.97)';
-            setTimeout(() => {
-                resultContainer.style.transform = 'scale(1)';
-            }, 100);
+                // Totalise toutes les lignes de transactions
+                const transactionInputs = document.querySelectorAll('.transaction-input');
+                transactionInputs.forEach(input => {
+                    const valStr = input.value.replace(',', '.');
+                    const val = parseFloat(valStr);
+                    if (!isNaN(val)) {
+                        totalBalance += val;
+                    }
+                });
 
-            // If total is 0 or less, daily budget is 0.
-            if (totalBalance <= 0) {
-                dailyBudgetDisplay.textContent = "0.00";
-                return;
+                resultContainer.style.transform = 'scale(0.97)';
+                setTimeout(() => {
+                    resultContainer.style.transform = 'scale(1)';
+                }, 100);
+
+                if (totalBalance <= 0) {
+                    dailyBudgetDisplay.textContent = "0.00";
+                } else {
+                    const dailyBudget = totalBalance / remainingDays;
+                    dailyBudgetDisplay.textContent = formatCHF(dailyBudget);
+                }
+
+                triggerAutoSave();
             }
 
-            const dailyBudget = totalBalance / remainingDays;
-            dailyBudgetDisplay.textContent = formatCHF(dailyBudget);
-        }
+            function addTransactionRow(val = '', label = '', isRecurring = false, recurringDay = null) {
+                const container = document.getElementById('transactionsContainer');
+                const row = document.createElement('div');
+                row.className = 'flex items-center bg-white rounded-2xl p-3 border border-[#EBE8F0] shadow-sm animate-fade-in gap-2';
+                
+                if (isRecurring && recurringDay) {
+                    row.dataset.recurringDay = recurringDay;
+                }
 
-        function addTransactionRow() {
-            const container = document.getElementById('transactionsContainer');
-            const row = document.createElement('div');
-            row.className = 'flex items-center bg-white rounded-2xl p-3 border border-[#EBE8F0] shadow-sm animate-fade-in';
-            
-            row.innerHTML = `
-                <span class="text-[#666666] font-bold mr-2 text-lg">CHF</span>
-                <input 
-                    type="number" 
-                    inputmode="decimal"
-                    class="transaction-input w-full bg-transparent text-xl font-bold outline-none text-[#1A1A1A] placeholder-[#C4C4C4]" 
-                    placeholder="+ ou - 0.00"
-                >
-                <button class="remove-btn p-2 text-[#666666] hover:text-[#FF3B30] transition-colors rounded-full hover:bg-[#F8F7FA] ml-1" title="Supprimer">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                </button>
-            `;
+                row.innerHTML = `
+                    <div class="flex-1 flex flex-col">
+                        ${label ? `<span class="text-[10px] uppercase font-bold text-[#FF5421] tracking-wider mb-0.5">${label}</span>` : ''}
+                        <div class="flex items-center">
+                            <span class="text-[#666666] font-bold mr-2 text-lg">CHF</span>
+                            <input 
+                                type="number" 
+                                inputmode="decimal"
+                                class="transaction-input w-full bg-transparent text-xl font-bold outline-none text-[#1A1A1A] placeholder-[#C4C4C4]" 
+                                placeholder="+ ou - 0.00"
+                                value="${val}"
+                            >
+                        </div>
+                    </div>
+                    <button class="remove-btn p-2 text-[#666666] hover:text-[#FF3B30] transition-colors rounded-full hover:bg-[#F8F7FA]" title="Supprimer">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
+                `;
 
-            // Listen to input changes
-            const input = row.querySelector('input');
-            input.addEventListener('input', updateCalculation);
+                const input = row.querySelector('.transaction-input');
+                input.addEventListener('input', updateCalculation);
 
-            // Listen to remove button
-            const removeBtn = row.querySelector('.remove-btn');
-            removeBtn.addEventListener('click', () => {
-                row.remove();
-                updateCalculation();
+                const removeBtn = row.querySelector('.remove-btn');
+                removeBtn.addEventListener('click', () => {
+                    if (isRecurring && recurringDay) {
+                        dismissedRecurringIds.add(recurringDay);
+                    }
+                    row.remove();
+                    updateCalculation();
+                });
+
+                container.appendChild(row);
+                return input;
+            }
+
+            function checkAndPopulateRecurring() {
+                const today = new Date();
+                const currentDay = today.getDate();
+
+                RECURRING_EXPENSES.forEach(exp => {
+                    // Si la date est aujourd'hui ou dans le futur ce mois-ci
+                    if (currentDay <= exp.day) {
+                        // Et si l'utilisateur ne l'a pas supprimée manuellement
+                        if (!dismissedRecurringIds.has(exp.day)) {
+                            // Vérifie si la ligne existe déjà dans l'UI
+                            const exists = document.querySelector(`[data-recurring-day="${exp.day}"]`);
+                            if (!exists) {
+                                addTransactionRow(exp.amount, exp.label, true, exp.day);
+                            }
+                        }
+                    }
+                });
+            }
+
+            async function initCloudStorage() {
+                try {
+                    const app = initializeApp(firebaseConfig);
+                    auth = getAuth(app);
+                    db = getFirestore(app);
+
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+
+                    user = auth.currentUser;
+                    if (!user) return;
+
+                    saveStatus.textContent = "● Synchro activée";
+
+                    // Charger les données sauvegardées
+                    const userId = user.uid;
+                    const docRef = doc(db, 'artifacts', appId, 'users', userId, 'budgetData', 'state');
+                    const docSnap = await getDoc(docRef);
+
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        if (data.balance !== undefined) {
+                            balanceInput.value = data.balance;
+                        }
+
+                        if (data.dismissedRecurring) {
+                            dismissedRecurringIds = new Set(data.dismissedRecurring);
+                        }
+
+                        // Appliquer les dépenses récurrentes d'abord
+                        checkAndPopulateRecurring();
+
+                        // Charger les transactions manuelles sauvegardées
+                        if (data.customTransactions && Array.isArray(data.customTransactions)) {
+                            data.customTransactions.forEach(t => {
+                                addTransactionRow(t.val, t.label || '');
+                            });
+                        }
+                    } else {
+                        checkAndPopulateRecurring();
+                    }
+
+                    updateCalculation();
+
+                } catch (e) {
+                    console.log("Fiestore offline/disabled, fallback local session:", e);
+                    checkAndPopulateRecurring();
+                    updateCalculation();
+                }
+            }
+
+            function triggerAutoSave() {
+                if (!user || !db) return;
+
+                saveStatus.textContent = "Sauvegarde...";
+                clearTimeout(saveTimeout);
+
+                saveTimeout = setTimeout(async () => {
+                    try {
+                        const customTransactions = [];
+                        const rows = document.querySelectorAll('#transactionsContainer > div');
+                        rows.forEach(row => {
+                            // Ne sauvegarde que les transactions manuelles (non récurrentes)
+                            if (!row.dataset.recurringDay) {
+                                const input = row.querySelector('.transaction-input');
+                                if (input && input.value) {
+                                    customTransactions.push({ val: input.value });
+                                }
+                            }
+                        });
+
+                        const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'budgetData', 'state');
+                        await setDoc(docRef, {
+                            balance: balanceInput.value,
+                            dismissedRecurring: Array.from(dismissedRecurringIds),
+                            customTransactions: customTransactions,
+                            updatedAt: new Date().toISOString()
+                        });
+
+                        saveStatus.textContent = "● Données enregistrées";
+                    } catch (e) {
+                        saveStatus.textContent = "● Mode local";
+                    }
+                }, 800);
+            }
+
+            // Event Listeners
+            balanceInput.addEventListener('input', updateCalculation);
+            document.getElementById('addTransactionBtn').addEventListener('click', () => {
+                const newInput = addTransactionRow();
+                newInput.focus();
             });
 
-            container.appendChild(row);
-            input.focus();
-        }
-
-        // Event Listeners
-        balanceInput.addEventListener('input', updateCalculation);
-        document.getElementById('addTransactionBtn').addEventListener('click', addTransactionRow);
-        
-        // Initialize
-        initApp();
-    });
+            // Lancement
+            initDateLogic();
+            await initCloudStorage();
+        });
     </script>
 </body>
 </html>
